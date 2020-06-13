@@ -17,7 +17,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "ASSAODemo.h"
-
+#include <cmath>                    // std:tan not found otherwise
 #include "Rendering/DirectX/vaRenderDeviceDX11.h"
 
 #include <functional>
