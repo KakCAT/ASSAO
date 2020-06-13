@@ -16,6 +16,20 @@
 // 2016-09-07: filip.strugar@intel.com: first commit
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+
+/*
+ASSAOWrapperDX11::Draw configura tots els parametres "extenrs" per a l'efecte SSAO
+i crida ASSAODX11::Draw ( buscar per "ASSAODX11::Draw" )
+
+INTEL_SSAO_ENABLE_ADAPTIVE_QUALITY controla si permet el sistema adaptatiu o no. El sistema adaptatiu te
+molt bona qualitat, pero es mes lent, i molt mes complicat de portar a altres plataformes.
+
+La tactica mes facil per portar aixo a MonoGame es treballar incrementalment. Podriem dumpejar els buffers
+que fa servir l'algorisme, i intentar-ho reproduir a MonoGame fent servir els mateixos buffers. Llavors, un
+cop tinguem el mateix resultat, intentar fer-ho funcionar amb les nostres dades.
+
+*/
+
 #include "ASSAO.h"
 
 #include <d3d11.h>
@@ -878,9 +892,11 @@ void           ASSAODX11::PrepareDepths( const ASSAO_Settings & settings, const 
 
     ID3D11DeviceContext * dx11Context = inputs->DeviceContext;
 
+    // depthmap a texture slot 0
     dx11Context->PSSetShaderResources( SSAO_TEXTURE_SLOT0, 1, &inputs->DepthSRV );
 
     {
+        // set viewports, segurament no caldria per nosaltres (doncs sempre sera full screen)
         CD3D11_VIEWPORT viewport = CD3D11_VIEWPORT( 0.0f, 0.0f, (float)m_halfSize.x, (float)m_halfSize.y );
         CD3D11_RECT rect = CD3D11_RECT( 0, 0, m_halfSize.x, m_halfSize.y );
         dx11Context->RSSetViewports( 1, &viewport );
@@ -895,18 +911,21 @@ void           ASSAODX11::PrepareDepths( const ASSAO_Settings & settings, const 
 
         if( settings.QualityLevel < 0 )
         {
+            // crida pixel shader "PSPrepareDepthsHalf"
             dx11Context->OMSetRenderTargets( _countof(twoDepths), twoDepths, NULL );
             FullscreenPassDraw( dx11Context, m_pixelShaderPrepareDepthsHalf );
         }
         else
         {
+            // crida pixel shader "PSPrepareDepths"
             dx11Context->OMSetRenderTargets( _countof(fourDepths), fourDepths, NULL );
             FullscreenPassDraw( dx11Context, m_pixelShaderPrepareDepths );
         }
     }
     else
     {
-        //VA_SCOPE_CPUGPU_TIMER( PrepareDepthsAndNormals, drawContext.APIContext );
+        // Aquest cami el fariem servir nosaltres si no tenim les normals calculades.
+        // Aixo nomes passaria en mode Forward.
 
         ID3D11UnorderedAccessView * UAVs[] = { m_normals.UAV };
         if( settings.QualityLevel < 0 )
@@ -989,6 +1008,7 @@ void           ASSAODX11::GenerateSSAO( const ASSAO_Settings & settings, const A
             blurPasses = Min( 1, settings.BlurPassCount );
         }
 
+        // Aquesta funcio tambe puja un munt de parametres per al SSAO. Cal reproduir-la exactament.
         UpdateConstants( settings, inputs, pass );
 
         D3D11Texture2D * pPingRT = &m_pingPongHalfResultA;
@@ -1075,6 +1095,10 @@ void           ASSAODX11::GenerateSSAO( const ASSAO_Settings & settings, const A
     }
 }
 
+
+//=============================================================================
+/// <summary>Aquesta es la funcio externa que es crida, i la que fa tota la feina de pintat
+/// (tot i que la inicialitzacio va per una altra banda)</summary>
 void           ASSAODX11::Draw( const ASSAO_Settings & settings, const ASSAO_Inputs * _inputs )
 {
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1091,8 +1115,11 @@ void           ASSAODX11::Draw( const ASSAO_Settings & settings, const ASSAO_Inp
     }
 #endif
 
+    // CREA els RT2D necessaris per renderitzar, pero crec que no els omple ni res. Nomes per resizing i pel primer cop.
     UpdateTextures( inputs );
 
+    // Actualitza els parametres del shader (com a punter) pero CREC que no els puja a la GPU (encara)
+    // tot el que hi ha en aquesta funcio ho haurem de posar al nostre codi
     UpdateConstants( settings, inputs, 0 );
 
     ID3D11DeviceContext * dx11Context = inputs->DeviceContext;
@@ -1124,7 +1151,7 @@ void           ASSAODX11::Draw( const ASSAO_Settings & settings, const ASSAO_Inp
             m_requiresClear = false;
         }
 
-        // Set effect samplers
+        // Set effect samplers. ** Aixo son sampler states que crea manualment el programa. Nosalters els hauriem de crear al MonoGame
         ID3D11SamplerState * samplers[] =
         {
             m_samplerStatePointClamp,
@@ -1134,10 +1161,11 @@ void           ASSAODX11::Draw( const ASSAO_Settings & settings, const ASSAO_Inp
         };
         dx11Context->PSSetSamplers( 0, _countof( samplers ), samplers );
 
-        // Set constant buffer
+        // Set constant buffer. Aixo fa efectiu el pas dels parametres que hem calculat a UpdateConstants cap a la GPU, crec. O potser diu de fer-los servir i el Map/Unmap en realitat ja els ha pujat a la GPU.
         dx11Context->PSSetConstantBuffers( SSAO_CONSTANTS_BUFFERSLOT, 1, &m_constantsBuffer );
 
-        // Generate depths
+        // Generate depths. Prepara (no se com ni perque) els depth maps. A vegades calcula les normals (pel mode forward)
+        // tambe genera mip maps per depth buffers en qualitat > 1
         PrepareDepths( settings, inputs );
 
 #ifdef INTEL_SSAO_ENABLE_ADAPTIVE_QUALITY
@@ -1265,7 +1293,7 @@ static vaVector4i GetTextureDimsFromSRV( ID3D11ShaderResourceView * srv )
 void ASSAODX11::UpdateTextures( const ASSAO_InputsDX11 * inputs )
 {
 #ifdef _DEBUG
-    vaVector4i depthTexDims = GetTextureDimsFromSRV( inputs->DepthSRV );
+    vaVector4i depthTexDims = GetTextureDimsFromSRV( inputs->DepthSRV );            // obte dimensio de la textura Depth i comprova que sigui correcta
     assert( depthTexDims.x >= inputs->ViewportWidth );
     assert( depthTexDims.y >= inputs->ViewportHeight );
     assert( depthTexDims.w == 1 );  // no texture arrays supported
